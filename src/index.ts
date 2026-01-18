@@ -6,7 +6,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { execSync, exec } from "child_process";
+import { exec } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
@@ -14,33 +14,68 @@ import * as os from "os";
 
 const execAsync = promisify(exec);
 
+// Find idb executable
+function findIdb(): string {
+  // Check environment variable first
+  if (process.env.IDB_PATH) {
+    return process.env.IDB_PATH;
+  }
+
+  // Common locations
+  const locations = [
+    path.join(os.homedir(), "Library/Python/3.9/bin/idb"),
+    "/opt/homebrew/bin/idb",
+    "/usr/local/bin/idb",
+  ];
+
+  for (const loc of locations) {
+    if (fs.existsSync(loc)) {
+      return loc;
+    }
+  }
+
+  // Fall back to PATH
+  return "idb";
+}
+
+const IDB = findIdb();
+
+// Execute idb command
+async function idb(args: string): Promise<string> {
+  const { stdout, stderr } = await execAsync(`${IDB} ${args}`);
+  if (stderr && !stdout) {
+    throw new Error(stderr);
+  }
+  return stdout.trim();
+}
+
 interface Simulator {
   udid: string;
   name: string;
   state: string;
-  runtime: string;
+  type: string;
+  os_version: string;
 }
 
-// Get list of available simulators
+// Parse idb list-targets output
+function parseListTargets(output: string): Simulator[] {
+  const lines = output.split("\n").filter((l) => l.trim());
+  return lines.map((line) => {
+    const parts = line.split("|").map((p) => p.trim());
+    return {
+      name: parts[0] || "",
+      udid: parts[1] || "",
+      state: parts[2] || "",
+      type: parts[3] || "",
+      os_version: parts[4] || "",
+    };
+  });
+}
+
+// List available simulators
 async function listSimulators(): Promise<Simulator[]> {
-  const { stdout } = await execAsync("xcrun simctl list devices -j");
-  const data = JSON.parse(stdout);
-  const simulators: Simulator[] = [];
-
-  for (const [runtime, devices] of Object.entries(data.devices) as [string, any[]][]) {
-    for (const device of devices) {
-      if (device.isAvailable) {
-        simulators.push({
-          udid: device.udid,
-          name: device.name,
-          state: device.state,
-          runtime: runtime.replace("com.apple.CoreSimulator.SimRuntime.", ""),
-        });
-      }
-    }
-  }
-
-  return simulators;
+  const output = await idb("list-targets");
+  return parseListTargets(output);
 }
 
 // Get booted simulator
@@ -51,28 +86,20 @@ async function getBootedSimulator(): Promise<Simulator | null> {
 
 // Boot a simulator
 async function bootSimulator(udid: string): Promise<string> {
-  try {
-    await execAsync(`xcrun simctl boot ${udid}`);
-    await execAsync("open -a Simulator");
-    return `Booted simulator ${udid}`;
-  } catch (error: any) {
-    if (error.message.includes("current state: Booted")) {
-      return "Simulator already booted";
-    }
-    throw error;
-  }
+  await idb(`boot --udid ${udid}`);
+  return `Booted simulator ${udid}`;
 }
 
 // Shutdown a simulator
 async function shutdownSimulator(udid: string): Promise<string> {
-  await execAsync(`xcrun simctl shutdown ${udid}`);
+  await idb(`shutdown --udid ${udid}`);
   return `Shut down simulator ${udid}`;
 }
 
 // Take a screenshot
 async function takeScreenshot(udid: string): Promise<string> {
   const tmpFile = path.join(os.tmpdir(), `sim-screenshot-${Date.now()}.png`);
-  await execAsync(`xcrun simctl io ${udid} screenshot "${tmpFile}"`);
+  await idb(`screenshot ${tmpFile} --udid ${udid}`);
   const imageData = fs.readFileSync(tmpFile);
   const base64 = imageData.toString("base64");
   fs.unlinkSync(tmpFile);
@@ -81,42 +108,88 @@ async function takeScreenshot(udid: string): Promise<string> {
 
 // Launch an app
 async function launchApp(udid: string, bundleId: string): Promise<string> {
-  const { stdout } = await execAsync(`xcrun simctl launch ${udid} ${bundleId}`);
-  return stdout.trim() || `Launched ${bundleId}`;
+  await idb(`launch ${bundleId} --udid ${udid}`);
+  return `Launched ${bundleId}`;
 }
 
 // Terminate an app
 async function terminateApp(udid: string, bundleId: string): Promise<string> {
-  await execAsync(`xcrun simctl terminate ${udid} ${bundleId}`);
+  await idb(`terminate ${bundleId} --udid ${udid}`);
   return `Terminated ${bundleId}`;
 }
 
-// Get Simulator window bounds using AppleScript
-async function getSimulatorWindowBounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
-  const script = `
-    tell application "System Events"
-      tell process "Simulator"
-        set frontWindow to front window
-        set {x, y} to position of frontWindow
-        set {w, h} to size of frontWindow
-        return {x, y, w, h}
-      end tell
-    end tell
-  `;
-  try {
-    const { stdout } = await execAsync(`osascript -e '${script}'`);
-    const [x, y, w, h] = stdout.trim().split(", ").map(Number);
-    return { x, y, width: w, height: h };
-  } catch {
-    return null;
-  }
+// Tap at coordinates
+async function tap(udid: string, x: number, y: number): Promise<string> {
+  await idb(`ui tap ${x} ${y} --udid ${udid}`);
+  return `Tapped at (${x}, ${y})`;
 }
 
-// Get simulator screen size
-async function getSimulatorScreenSize(udid: string): Promise<{ width: number; height: number }> {
-  // Take a screenshot and get dimensions
+// Swipe
+async function swipe(
+  udid: string,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  duration?: number
+): Promise<string> {
+  const durationArg = duration ? `--duration ${duration / 1000}` : "";
+  await idb(`ui swipe ${startX} ${startY} ${endX} ${endY} ${durationArg} --udid ${udid}`);
+  return `Swiped from (${startX}, ${startY}) to (${endX}, ${endY})`;
+}
+
+// Type text
+async function typeText(udid: string, text: string): Promise<string> {
+  // Escape quotes for shell
+  const escaped = text.replace(/'/g, "'\\''");
+  await idb(`ui text '${escaped}' --udid ${udid}`);
+  return `Typed: ${text}`;
+}
+
+// Press a key
+async function pressKey(udid: string, keycode: number): Promise<string> {
+  await idb(`ui key ${keycode} --udid ${udid}`);
+  return `Pressed key: ${keycode}`;
+}
+
+// Press device button
+async function pressButton(udid: string, button: string): Promise<string> {
+  const validButtons = ["apple_pay", "home", "lock", "side_button", "siri"];
+  if (!validButtons.includes(button.toLowerCase())) {
+    throw new Error(`Invalid button: ${button}. Valid buttons: ${validButtons.join(", ")}`);
+  }
+  await idb(`ui button ${button.toUpperCase()} --udid ${udid}`);
+  return `Pressed button: ${button}`;
+}
+
+// Open URL
+async function openUrl(udid: string, url: string): Promise<string> {
+  await idb(`open ${url} --udid ${udid}`);
+  return `Opened URL: ${url}`;
+}
+
+// List installed apps
+async function listApps(udid: string): Promise<string> {
+  const output = await idb(`list-apps --udid ${udid}`);
+  return output;
+}
+
+// Get screen info via describe
+async function describeScreen(udid: string): Promise<string> {
+  const output = await idb(`ui describe-all --udid ${udid}`);
+  return output;
+}
+
+// Describe point
+async function describePoint(udid: string, x: number, y: number): Promise<string> {
+  const output = await idb(`ui describe-point ${x} ${y} --udid ${udid}`);
+  return output;
+}
+
+// Get screen size by taking a screenshot and checking dimensions
+async function getScreenSize(udid: string): Promise<{ width: number; height: number }> {
   const tmpFile = path.join(os.tmpdir(), `sim-size-${Date.now()}.png`);
-  await execAsync(`xcrun simctl io ${udid} screenshot "${tmpFile}"`);
+  await idb(`screenshot ${tmpFile} --udid ${udid}`);
   const { stdout } = await execAsync(`sips -g pixelWidth -g pixelHeight "${tmpFile}"`);
   fs.unlinkSync(tmpFile);
 
@@ -124,168 +197,9 @@ async function getSimulatorScreenSize(udid: string): Promise<{ width: number; he
   const heightMatch = stdout.match(/pixelHeight: (\d+)/);
 
   return {
-    width: widthMatch ? parseInt(widthMatch[1]) : 390,
-    height: heightMatch ? parseInt(heightMatch[1]) : 844,
+    width: widthMatch ? parseInt(widthMatch[1]) : 0,
+    height: heightMatch ? parseInt(heightMatch[1]) : 0,
   };
-}
-
-// Tap at coordinates using cliclick
-async function tap(udid: string, x: number, y: number): Promise<string> {
-  const bounds = await getSimulatorWindowBounds();
-  if (!bounds) {
-    throw new Error("Could not get Simulator window bounds. Is Simulator running?");
-  }
-
-  const screenSize = await getSimulatorScreenSize(udid);
-
-  // Account for window chrome (title bar ~28px, and device bezel in simulator)
-  const titleBarHeight = 28;
-  const contentHeight = bounds.height - titleBarHeight;
-
-  // Scale coordinates from simulator screen to window
-  const scaleX = bounds.width / screenSize.width;
-  const scaleY = contentHeight / screenSize.height;
-
-  const screenX = Math.round(bounds.x + x * scaleX);
-  const screenY = Math.round(bounds.y + titleBarHeight + y * scaleY);
-
-  await execAsync(`cliclick c:${screenX},${screenY}`);
-  return `Tapped at (${x}, ${y}) -> screen (${screenX}, ${screenY})`;
-}
-
-// Swipe using cliclick drag
-async function swipe(
-  udid: string,
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-  durationMs: number = 300
-): Promise<string> {
-  const bounds = await getSimulatorWindowBounds();
-  if (!bounds) {
-    throw new Error("Could not get Simulator window bounds. Is Simulator running?");
-  }
-
-  const screenSize = await getSimulatorScreenSize(udid);
-  const titleBarHeight = 28;
-  const contentHeight = bounds.height - titleBarHeight;
-
-  const scaleX = bounds.width / screenSize.width;
-  const scaleY = contentHeight / screenSize.height;
-
-  const screenStartX = Math.round(bounds.x + startX * scaleX);
-  const screenStartY = Math.round(bounds.y + titleBarHeight + startY * scaleY);
-  const screenEndX = Math.round(bounds.x + endX * scaleX);
-  const screenEndY = Math.round(bounds.y + titleBarHeight + endY * scaleY);
-
-  // cliclick drag command: dd (drag down) from start to end
-  await execAsync(`cliclick dd:${screenStartX},${screenStartY} du:${screenEndX},${screenEndY}`);
-  return `Swiped from (${startX}, ${startY}) to (${endX}, ${endY})`;
-}
-
-// Type text using clipboard and paste
-async function typeText(text: string): Promise<string> {
-  // Copy text to clipboard
-  await execAsync(`echo -n "${text.replace(/"/g, '\\"')}" | pbcopy`);
-  // Paste using Command+V via AppleScript
-  const script = `
-    tell application "System Events"
-      tell process "Simulator"
-        set frontmost to true
-        keystroke "v" using command down
-      end tell
-    end tell
-  `;
-  await execAsync(`osascript -e '${script}'`);
-  return `Typed: ${text}`;
-}
-
-// Press a key using AppleScript
-async function pressKey(key: string): Promise<string> {
-  let keystroke: string;
-
-  switch (key.toLowerCase()) {
-    case "enter":
-    case "return":
-      keystroke = 'key code 36'; // Return key
-      break;
-    case "delete":
-    case "backspace":
-      keystroke = 'key code 51'; // Delete key
-      break;
-    case "escape":
-      keystroke = 'key code 53';
-      break;
-    case "tab":
-      keystroke = 'key code 48';
-      break;
-    default:
-      keystroke = `keystroke "${key}"`;
-  }
-
-  const script = `
-    tell application "System Events"
-      tell process "Simulator"
-        set frontmost to true
-        ${keystroke}
-      end tell
-    end tell
-  `;
-  await execAsync(`osascript -e '${script}'`);
-  return `Pressed key: ${key}`;
-}
-
-// Press device button (home, etc.)
-async function pressButton(udid: string, button: string): Promise<string> {
-  const buttonMap: Record<string, string> = {
-    home: "home",
-    lock: "lock",
-    "volume-up": "volume up",
-    "volume-down": "volume down",
-  };
-
-  const simButton = buttonMap[button.toLowerCase()];
-  if (!simButton) {
-    throw new Error(`Unknown button: ${button}. Supported: home, lock, volume-up, volume-down`);
-  }
-
-  // Use AppleScript to trigger menu items
-  if (button.toLowerCase() === "home") {
-    const script = `
-      tell application "System Events"
-        tell process "Simulator"
-          click menu item "Home" of menu "Device" of menu bar 1
-        end tell
-      end tell
-    `;
-    await execAsync(`osascript -e '${script}'`);
-  } else {
-    // For other buttons, try simctl
-    await execAsync(`xcrun simctl ui ${udid} button ${simButton}`).catch(() => {
-      // Fallback - some buttons may not be available
-    });
-  }
-
-  return `Pressed button: ${button}`;
-}
-
-// Open URL in simulator
-async function openUrl(udid: string, url: string): Promise<string> {
-  await execAsync(`xcrun simctl openurl ${udid} "${url}"`);
-  return `Opened URL: ${url}`;
-}
-
-// List installed apps
-async function listApps(udid: string): Promise<string[]> {
-  const { stdout } = await execAsync(`xcrun simctl listapps ${udid}`);
-  const apps: string[] = [];
-  const bundleIdRegex = /CFBundleIdentifier = "([^"]+)"/g;
-  let match;
-  while ((match = bundleIdRegex.exec(stdout)) !== null) {
-    apps.push(match[1]);
-  }
-  return apps;
 }
 
 // Create the MCP server
@@ -341,7 +255,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            udid: { type: "string", description: "Simulator UDID (optional, uses booted simulator if not provided)" },
+            udid: {
+              type: "string",
+              description: "Simulator UDID (optional, uses booted simulator if not provided)",
+            },
           },
         },
       },
@@ -427,7 +344,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: "object",
           properties: {
             udid: { type: "string", description: "Simulator UDID (optional)" },
-            button: { type: "string", description: "Button name: home, lock, volume-up, volume-down" },
+            button: {
+              type: "string",
+              description: "Button name: home, lock, volume-up, volume-down",
+            },
           },
           required: ["button"],
         },
@@ -462,6 +382,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             udid: { type: "string", description: "Simulator UDID (optional)" },
           },
+        },
+      },
+      {
+        name: "describe_screen",
+        description: "Get accessibility tree of the current screen (useful for finding tap targets)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            udid: { type: "string", description: "Simulator UDID (optional)" },
+          },
+        },
+      },
+      {
+        name: "describe_point",
+        description: "Get accessibility info at specific coordinates",
+        inputSchema: {
+          type: "object",
+          properties: {
+            udid: { type: "string", description: "Simulator UDID (optional)" },
+            x: { type: "number", description: "X coordinate" },
+            y: { type: "number", description: "Y coordinate" },
+          },
+          required: ["x", "y"],
         },
       },
     ],
@@ -539,12 +482,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "type_text": {
-        const result = await typeText(args?.text as string);
+        const udid = await getUdid(args?.udid as string);
+        const result = await typeText(udid, args?.text as string);
         return { content: [{ type: "text", text: result }] };
       }
 
       case "press_key": {
-        const result = await pressKey(args?.key as string);
+        const udid = await getUdid(args?.udid as string);
+        // Map common key names to keycodes
+        const keyMap: Record<string, number> = {
+          enter: 40,
+          return: 40,
+          tab: 43,
+          delete: 42,
+          backspace: 42,
+          escape: 41,
+          space: 44,
+        };
+        const key = (args?.key as string).toLowerCase();
+        const keycode = keyMap[key] || key.charCodeAt(0);
+        const result = await pressKey(udid, keycode);
         return { content: [{ type: "text", text: result }] };
       }
 
@@ -563,13 +520,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "list_apps": {
         const udid = await getUdid(args?.udid as string);
         const apps = await listApps(udid);
-        return { content: [{ type: "text", text: JSON.stringify(apps, null, 2) }] };
+        return { content: [{ type: "text", text: apps }] };
       }
 
       case "get_screen_size": {
         const udid = await getUdid(args?.udid as string);
-        const size = await getSimulatorScreenSize(udid);
+        const size = await getScreenSize(udid);
         return { content: [{ type: "text", text: JSON.stringify(size) }] };
+      }
+
+      case "describe_screen": {
+        const udid = await getUdid(args?.udid as string);
+        const description = await describeScreen(udid);
+        return { content: [{ type: "text", text: description }] };
+      }
+
+      case "describe_point": {
+        const udid = await getUdid(args?.udid as string);
+        const description = await describePoint(udid, args?.x as number, args?.y as number);
+        return { content: [{ type: "text", text: description }] };
       }
 
       default:
@@ -587,7 +556,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("iOS Simulator MCP server running on stdio");
+  console.error("iOS Simulator MCP server running on stdio (using idb)");
 }
 
 main().catch(console.error);

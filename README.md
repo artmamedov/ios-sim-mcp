@@ -1,29 +1,42 @@
 # ios-sim-mcp
 
-A lightweight MCP (Model Context Protocol) server for iOS Simulator automation. Built for use with Claude Code and other MCP-compatible tools.
+A Model Context Protocol (MCP) server for iOS Simulator automation. Enables AI assistants like Claude to visually interact with iOS apps running in the simulator.
 
-## Features
+## How It Works
 
-- **Screenshots** - Capture simulator screen as base64 PNG
-- **Tap** - Tap at x,y coordinates
-- **Swipe** - Swipe gestures
-- **Type** - Type text into focused fields
-- **App Management** - Launch, terminate, list apps
-- **Device Control** - Boot/shutdown simulators, press buttons, open URLs
+This MCP server wraps [Facebook's idb (iOS Development Bridge)](https://github.com/facebook/idb) to provide isolated, headless control of iOS simulators. Unlike approaches that control your mouse/keyboard, idb injects touch events directly into the simulator - meaning:
+
+- **Runs in the background** - doesn't take over your screen
+- **Isolated** - you can use your computer while it runs
+- **Reliable** - uses the same infrastructure Facebook uses for testing
 
 ## Requirements
 
-- macOS with Xcode installed
-- Node.js 18+
-- `cliclick` (for tap/swipe): `brew install cliclick`
+- **macOS** (iOS Simulator only runs on Mac)
+- **Xcode** with iOS Simulator installed
+- **Node.js** 18+
+- **idb** (installed automatically, or manually via steps below)
+
+### Installing idb manually
+
+```bash
+# Install idb-companion (the daemon)
+brew tap facebook/fb
+brew install idb-companion
+
+# Install idb (the Python CLI client)
+pip3 install fb-idb
+```
 
 ## Installation
+
+### Option 1: Install from npm (recommended)
 
 ```bash
 npm install -g ios-sim-mcp
 ```
 
-Or clone and build:
+### Option 2: Clone and build
 
 ```bash
 git clone https://github.com/artmamedov/ios-sim-mcp.git
@@ -34,71 +47,111 @@ npm run build
 
 ## Usage with Claude Code
 
-Add to your MCP configuration:
-
 ```bash
-claude mcp add ios-sim -- npx ios-sim-mcp
+claude mcp add ios-sim -s user -- npx ios-sim-mcp
 ```
 
-Or manually add to your Claude config:
+Or if installed from source:
 
-```json
-{
-  "mcpServers": {
-    "ios-sim": {
-      "command": "npx",
-      "args": ["ios-sim-mcp"]
-    }
-  }
-}
+```bash
+claude mcp add ios-sim -s user -- node /path/to/ios-sim-mcp/dist/index.js
 ```
 
 ## Available Tools
 
 | Tool | Description |
 |------|-------------|
-| `list_simulators` | List all available iOS simulators |
+| `list_simulators` | List all available iOS simulators with state |
 | `boot_simulator` | Boot a simulator by UDID |
 | `shutdown_simulator` | Shutdown a simulator |
 | `screenshot` | Take a screenshot (returns base64 PNG) |
 | `launch_app` | Launch an app by bundle ID |
-| `terminate_app` | Terminate an app |
+| `terminate_app` | Terminate a running app |
+| `list_apps` | List installed apps on simulator |
 | `tap` | Tap at x,y coordinates |
 | `swipe` | Swipe from one point to another |
 | `type_text` | Type text into focused field |
-| `press_key` | Press keyboard key (enter, delete, etc.) |
-| `press_button` | Press device button (home, volume, lock) |
+| `press_key` | Press a keyboard key |
+| `press_button` | Press device button (home, lock, siri, apple_pay) |
 | `open_url` | Open a URL in the simulator |
-| `list_apps` | List installed apps |
-| `get_screen_size` | Get screen dimensions |
+| `get_screen_size` | Get simulator screen dimensions |
+| `describe_screen` | Get accessibility tree of current screen |
+| `describe_point` | Get accessibility info at specific coordinates |
 
-## How It Works
+## Example Usage
 
-- Uses `xcrun simctl` for simulator management, screenshots, and app control
-- Uses `cliclick` for precise tap and swipe gestures
-- Uses AppleScript to interact with the Simulator window
-- Automatically finds the booted simulator if UDID not provided
-
-## Examples
+Once connected, Claude can:
 
 ```
-// List simulators
+// List available simulators
 list_simulators()
 
-// Take a screenshot
+// Boot iPhone 17 Pro
+boot_simulator({ udid: "FFD39627-..." })
+
+// Take a screenshot to see what's on screen
 screenshot()
 
-// Tap at coordinates
+// Tap on a button at coordinates
 tap({ x: 200, y: 400 })
 
-// Type into a field
+// Type into a text field
 type_text({ text: "hello@example.com" })
-press_key({ key: "enter" })
 
-// Swipe up
+// Swipe up to scroll
 swipe({ startX: 200, startY: 600, endX: 200, endY: 200 })
+
+// Get accessibility info for the screen
+describe_screen()
 ```
+
+## Architecture
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Claude/LLM    │────▶│  ios-sim-mcp    │────▶│  idb companion  │
+│                 │ MCP │  (this server)  │ CLI │  (Facebook's)   │
+└─────────────────┘     └─────────────────┘     └────────┬────────┘
+                                                         │
+                                                         ▼
+                                                ┌─────────────────┐
+                                                │  iOS Simulator  │
+                                                │  (Xcode)        │
+                                                └─────────────────┘
+```
+
+- **MCP Protocol**: Communication between Claude and this server
+- **idb CLI**: This server executes idb commands to control the simulator
+- **idb companion**: A daemon that interfaces with the simulator at a low level
+
+## Configuration
+
+The server looks for `idb` in these locations:
+1. System PATH
+2. `/Users/{user}/Library/Python/3.9/bin/idb`
+3. `/opt/homebrew/bin/idb`
+
+You can also set the `IDB_PATH` environment variable to specify a custom location.
+
+## Troubleshooting
+
+### "idb not found"
+Make sure idb is installed: `pip3 install fb-idb`
+
+### "No Companion Connected"
+The idb companion starts automatically when needed. If issues persist:
+```bash
+idb_companion --udid <simulator-udid>
+```
+
+### Tap coordinates are wrong
+Coordinates are in screen points (not pixels). Use `get_screen_size()` to see dimensions, or `describe_screen()` to get element positions.
 
 ## License
 
 MIT
+
+## Credits
+
+- [Facebook idb](https://github.com/facebook/idb) - The underlying automation framework
+- [Model Context Protocol](https://modelcontextprotocol.io/) - The protocol specification
