@@ -113,6 +113,13 @@ export async function getBootedSimulator(): Promise<Simulator | null> {
   return simulators.find((s) => s.state === "Booted") || null;
 }
 
+// Helper for actionable error when no booted simulator
+export function noBootedSimulatorError(): Error {
+  return new Error(
+    "No booted simulator found. Use list_simulators to find available simulators, then boot_simulator with a UDID."
+  );
+}
+
 export async function bootSimulator(udid: string): Promise<string> {
   await idb(`boot --udid ${udid}`);
   return `Booted simulator ${udid}`;
@@ -180,8 +187,11 @@ export async function pressKey(udid: string, keycode: number): Promise<string> {
 
 export async function pressButton(udid: string, button: string): Promise<string> {
   const validButtons = ["apple_pay", "home", "lock", "side_button", "siri"];
-  if (!validButtons.includes(button.toLowerCase())) {
-    throw new Error(`Invalid button: ${button}. Valid: ${validButtons.join(", ")}`);
+  const normalizedButton = button.toLowerCase();
+  if (!validButtons.includes(normalizedButton)) {
+    throw new Error(
+      `Invalid button '${button}'. Valid options: home (go to home screen), lock (toggle screen lock), siri (activate Siri), apple_pay (trigger Apple Pay).`
+    );
   }
   await idb(`ui button ${button.toUpperCase()} --udid ${udid}`);
   return `Pressed button: ${button}`;
@@ -213,7 +223,9 @@ export async function findElements(udid: string, label: string): Promise<UIEleme
 export async function tapElement(udid: string, label: string): Promise<string> {
   const matches = await findElements(udid, label);
   if (matches.length === 0) {
-    throw new Error(`No element found with label containing "${label}"`);
+    throw new Error(
+      `No element found with label containing "${label}". Use describe_screen to see all available elements and their labels, or use find_elements to search with different text.`
+    );
   }
   const el = matches[0];
   const centerX = Math.round(el.frame.x + el.frame.width / 2);

@@ -10,191 +10,305 @@ const server = new Server(
   { capabilities: { tools: {} } }
 );
 
-// Tool definitions
+// Tool definitions with AI-agent-friendly descriptions
 const tools = [
   {
     name: "list_simulators",
-    description: "List all available iOS simulators",
+    description: "List all available iOS simulators with their current state. Returns array of simulators with name, udid, state (Booted/Shutdown), type, and os_version. Use this first to find simulator UDIDs for other commands.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "boot_simulator",
-    description: "Boot an iOS simulator by UDID",
+    description: "Boot an iOS simulator by UDID. Simulator must be booted before you can interact with it. Use list_simulators first to find available UDIDs. Returns confirmation message on success.",
     inputSchema: {
       type: "object",
-      properties: { udid: { type: "string", description: "Simulator UDID" } },
+      properties: {
+        udid: {
+          type: "string",
+          description: "Simulator UDID from list_simulators (e.g., 'FFD39627-3B87-4E21-B773-3AD45DA1B7A5')",
+        },
+      },
       required: ["udid"],
     },
   },
   {
     name: "shutdown_simulator",
-    description: "Shutdown an iOS simulator by UDID",
+    description: "Shutdown a running iOS simulator by UDID. Use when done testing to free system resources.",
     inputSchema: {
       type: "object",
-      properties: { udid: { type: "string", description: "Simulator UDID" } },
+      properties: {
+        udid: {
+          type: "string",
+          description: "Simulator UDID to shutdown",
+        },
+      },
       required: ["udid"],
     },
   },
   {
     name: "screenshot",
-    description: "Take a screenshot of the simulator. Returns base64 PNG image.",
+    description: "Take a screenshot of the simulator screen. Returns base64-encoded PNG image. Use this to see the current UI state before interacting. If no udid provided, uses the currently booted simulator.",
     inputSchema: {
       type: "object",
-      properties: { udid: { type: "string", description: "Simulator UDID (optional)" } },
+      properties: {
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+      },
     },
   },
   {
     name: "launch_app",
-    description: "Launch an app on the simulator",
+    description: "Launch an app on the simulator by bundle ID. App must be installed on the simulator. Use list_apps to find installed bundle IDs. Returns confirmation on success.",
     inputSchema: {
       type: "object",
       properties: {
-        udid: { type: "string", description: "Simulator UDID (optional)" },
-        bundleId: { type: "string", description: "App bundle identifier" },
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+        bundleId: {
+          type: "string",
+          description: "App bundle identifier (e.g., 'com.apple.mobilesafari', 'com.example.myapp')",
+        },
       },
       required: ["bundleId"],
     },
   },
   {
     name: "terminate_app",
-    description: "Terminate an app on the simulator",
+    description: "Terminate a running app on the simulator. Use to close an app without shutting down the simulator.",
     inputSchema: {
       type: "object",
       properties: {
-        udid: { type: "string", description: "Simulator UDID (optional)" },
-        bundleId: { type: "string", description: "App bundle identifier" },
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+        bundleId: {
+          type: "string",
+          description: "Bundle ID of app to terminate (e.g., 'com.apple.mobilesafari')",
+        },
       },
       required: ["bundleId"],
     },
   },
   {
     name: "tap",
-    description: "Tap at x,y coordinates on the simulator screen",
+    description: "Tap at x,y coordinates on the simulator screen. Coordinates are in POINTS (not pixels). Use describe_screen or find_elements to get element coordinates, or get_screen_size to understand the coordinate system.",
     inputSchema: {
       type: "object",
       properties: {
-        udid: { type: "string", description: "Simulator UDID (optional)" },
-        x: { type: "number", description: "X coordinate" },
-        y: { type: "number", description: "Y coordinate" },
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+        x: {
+          type: "number",
+          description: "X coordinate in points (0 = left edge)",
+        },
+        y: {
+          type: "number",
+          description: "Y coordinate in points (0 = top edge)",
+        },
       },
       required: ["x", "y"],
     },
   },
   {
     name: "swipe",
-    description: "Swipe from one point to another on the simulator",
+    description: "Swipe from one point to another on the simulator. Use for scrolling (swipe up to scroll down), dismissing, or navigating. Coordinates are in POINTS.",
     inputSchema: {
       type: "object",
       properties: {
-        udid: { type: "string", description: "Simulator UDID (optional)" },
-        startX: { type: "number", description: "Start X coordinate" },
-        startY: { type: "number", description: "Start Y coordinate" },
-        endX: { type: "number", description: "End X coordinate" },
-        endY: { type: "number", description: "End Y coordinate" },
-        duration: { type: "number", description: "Duration in milliseconds" },
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+        startX: {
+          type: "number",
+          description: "Starting X coordinate in points",
+        },
+        startY: {
+          type: "number",
+          description: "Starting Y coordinate in points",
+        },
+        endX: {
+          type: "number",
+          description: "Ending X coordinate in points",
+        },
+        endY: {
+          type: "number",
+          description: "Ending Y coordinate in points",
+        },
+        duration: {
+          type: "number",
+          description: "Swipe duration in milliseconds (default: 300, range: 100-5000). Slower swipes for precise control.",
+        },
       },
       required: ["startX", "startY", "endX", "endY"],
     },
   },
   {
     name: "type_text",
-    description: "Type text into the focused field",
+    description: "Type text into the currently focused text field. A text field must be focused first (tap on it). For special keys like Enter, use press_key instead.",
     inputSchema: {
       type: "object",
-      properties: { text: { type: "string", description: "Text to type" } },
+      properties: {
+        text: {
+          type: "string",
+          description: "Text to type (supports unicode, emojis)",
+        },
+      },
       required: ["text"],
     },
   },
   {
     name: "press_key",
-    description: "Press a keyboard key (enter, delete, escape, tab, or any character)",
+    description: "Press a keyboard key. Use for special keys like enter/return to submit forms, delete/backspace to erase, escape to cancel, tab to move focus, or any single character.",
     inputSchema: {
       type: "object",
-      properties: { key: { type: "string", description: "Key to press" } },
+      properties: {
+        key: {
+          type: "string",
+          description: "Key name: 'enter', 'return', 'delete', 'backspace', 'escape', 'tab', 'space', or any single character",
+          enum: ["enter", "return", "delete", "backspace", "escape", "tab", "space"],
+        },
+      },
       required: ["key"],
     },
   },
   {
     name: "press_button",
-    description: "Press a device button (home, lock, siri, apple_pay)",
+    description: "Press a physical device button. Home button goes to home screen, lock toggles screen lock, siri activates Siri, apple_pay triggers Apple Pay.",
     inputSchema: {
       type: "object",
       properties: {
-        udid: { type: "string", description: "Simulator UDID (optional)" },
-        button: { type: "string", description: "Button: home, lock, siri, apple_pay" },
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+        button: {
+          type: "string",
+          description: "Button to press",
+          enum: ["home", "lock", "siri", "apple_pay"],
+        },
       },
       required: ["button"],
     },
   },
   {
     name: "open_url",
-    description: "Open a URL in the simulator",
+    description: "Open a URL in the simulator. Opens in the default handler - http/https URLs open in Safari, custom URL schemes open their registered apps (e.g., 'myapp://path').",
     inputSchema: {
       type: "object",
       properties: {
-        udid: { type: "string", description: "Simulator UDID (optional)" },
-        url: { type: "string", description: "URL to open" },
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+        url: {
+          type: "string",
+          description: "URL to open (e.g., 'https://example.com' or 'myapp://deeplink')",
+        },
       },
       required: ["url"],
     },
   },
   {
     name: "list_apps",
-    description: "List installed apps on the simulator",
+    description: "List all installed apps on the simulator. Returns bundle IDs and app info. Use this to find bundle IDs for launch_app and terminate_app.",
     inputSchema: {
       type: "object",
-      properties: { udid: { type: "string", description: "Simulator UDID (optional)" } },
+      properties: {
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+      },
     },
   },
   {
     name: "get_screen_size",
-    description: "Get the simulator screen dimensions",
+    description: "Get simulator screen dimensions in both pixels and points, plus scale factor. Coordinates for tap/swipe use POINTS. Returns: { pixels: {width, height}, points: {width, height}, scale }",
     inputSchema: {
       type: "object",
-      properties: { udid: { type: "string", description: "Simulator UDID (optional)" } },
+      properties: {
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+      },
     },
   },
   {
     name: "describe_screen",
-    description: "Get accessibility tree of the current screen (useful for finding tap targets)",
+    description: "Get all interactive UI elements on the current screen with their accessibility labels, types, and frame coordinates. Returns array of elements with: type, label, value, frame {x, y, width, height}, enabled. Use this to find elements before tapping. Coordinates are in POINTS.",
     inputSchema: {
       type: "object",
-      properties: { udid: { type: "string", description: "Simulator UDID (optional)" } },
+      properties: {
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+      },
     },
   },
   {
     name: "describe_point",
-    description: "Get accessibility info at specific coordinates",
+    description: "Get accessibility info for the UI element at specific coordinates. Use to identify what element is at a particular location. Coordinates are in POINTS.",
     inputSchema: {
       type: "object",
       properties: {
-        udid: { type: "string", description: "Simulator UDID (optional)" },
-        x: { type: "number", description: "X coordinate" },
-        y: { type: "number", description: "Y coordinate" },
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+        x: {
+          type: "number",
+          description: "X coordinate in points",
+        },
+        y: {
+          type: "number",
+          description: "Y coordinate in points",
+        },
       },
       required: ["x", "y"],
     },
   },
   {
     name: "find_elements",
-    description: "Find UI elements by label (case-insensitive partial match)",
+    description: "Search for UI elements by accessibility label. Case-insensitive partial match. Returns array of matching elements with type, label, value, and frame coordinates. Use this to find elements by text content, then tap_element or tap using the frame coordinates.",
     inputSchema: {
       type: "object",
       properties: {
-        udid: { type: "string", description: "Simulator UDID (optional)" },
-        label: { type: "string", description: "Label to search for" },
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+        label: {
+          type: "string",
+          description: "Text to search for in element labels (case-insensitive, partial match)",
+        },
       },
       required: ["label"],
     },
   },
   {
     name: "tap_element",
-    description: "Find an element by label and tap it",
+    description: "Find an element by its accessibility label and tap its center. Easier than find_elements + tap when you know the element's label. Throws error if no matching element found - use find_elements first to verify the label exists.",
     inputSchema: {
       type: "object",
       properties: {
-        udid: { type: "string", description: "Simulator UDID (optional)" },
-        label: { type: "string", description: "Label of element to tap" },
+        udid: {
+          type: "string",
+          description: "Simulator UDID (optional - uses booted simulator if not provided)",
+        },
+        label: {
+          type: "string",
+          description: "Accessibility label to search for and tap (case-insensitive, partial match)",
+        },
       },
       required: ["label"],
     },
@@ -203,11 +317,11 @@ const tools = [
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
-// Helper to get UDID
+// Helper to get UDID with actionable error
 async function getUdid(providedUdid?: string): Promise<string> {
   if (providedUdid) return providedUdid;
   const booted = await idb.getBootedSimulator();
-  if (!booted) throw new Error("No booted simulator found. Provide a UDID or boot a simulator.");
+  if (!booted) throw idb.noBootedSimulatorError();
   return booted.udid;
 }
 

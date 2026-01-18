@@ -1,10 +1,10 @@
 # ios-sim-mcp
 
-A Model Context Protocol (MCP) server for iOS Simulator automation. Enables AI assistants like Claude to visually interact with iOS apps running in the simulator.
+A Model Context Protocol (MCP) server for iOS Simulator automation. Enables AI assistants to visually interact with iOS apps running in the simulator.
 
 ## How It Works
 
-This MCP server wraps [Facebook's idb (iOS Development Bridge)](https://github.com/facebook/idb) to provide isolated, headless control of iOS simulators. Unlike approaches that control your mouse/keyboard, idb injects touch events directly into the simulator - meaning:
+This MCP server wraps [Facebook's idb (iOS Development Bridge)](https://github.com/facebook/idb) to provide isolated, headless control of iOS simulators. Unlike approaches that control your mouse/keyboard, idb injects touch events directly into the simulator:
 
 - **Runs in the background** - doesn't take over your screen
 - **Isolated** - you can use your computer while it runs
@@ -15,9 +15,9 @@ This MCP server wraps [Facebook's idb (iOS Development Bridge)](https://github.c
 - **macOS** (iOS Simulator only runs on Mac)
 - **Xcode** with iOS Simulator installed
 - **Node.js** 18+
-- **idb** (installed automatically, or manually via steps below)
+- **idb** (install via steps below)
 
-### Installing idb manually
+### Installing idb
 
 ```bash
 # Install idb-companion (the daemon)
@@ -57,55 +57,140 @@ Or if installed from source:
 claude mcp add ios-sim -s user -- node /path/to/ios-sim-mcp/dist/index.js
 ```
 
+## Coordinate System
+
+**All coordinates are in POINTS, not pixels.**
+
+- Points are device-independent units used by iOS
+- Use `get_screen_size` to get both pixel and point dimensions
+- Use `describe_screen` to get element coordinates in points
+- Common sizes: iPhone 17 Pro is 393x852 points
+
+## Common Workflows
+
+### 1. Getting Started
+
+```
+list_simulators              → Find available simulators and their UDIDs
+boot_simulator(udid)         → Boot the simulator you want
+screenshot                   → Verify it's running, see the screen
+```
+
+### 2. Finding and Tapping UI Elements
+
+```
+# Option A: Search by label (recommended)
+find_elements(label: "Sign In")  → Returns elements with matching labels
+tap_element(label: "Sign In")    → Find and tap in one step
+
+# Option B: Use coordinates from accessibility tree
+describe_screen              → Get all elements with their frame coordinates
+tap(x: 196, y: 425)          → Tap at the element's center
+```
+
+### 3. Filling Out Forms
+
+```
+tap_element(label: "Email")      → Focus the email field
+type_text(text: "user@test.com") → Type the email
+press_key(key: "tab")            → Move to next field
+type_text(text: "password123")   → Type the password
+tap_element(label: "Submit")     → Submit the form
+```
+
+### 4. Scrolling and Navigation
+
+```
+# Scroll down (swipe up)
+swipe(startX: 200, startY: 600, endX: 200, endY: 200)
+
+# Scroll up (swipe down)
+swipe(startX: 200, startY: 200, endX: 200, endY: 600)
+
+# Go back to home screen
+press_button(button: "home")
+```
+
+### 5. Testing Deep Links
+
+```
+open_url(url: "myapp://profile/settings")  → Open custom URL scheme
+screenshot                                  → Verify the right screen loaded
+```
+
 ## Available Tools
 
-| Tool | Description |
-|------|-------------|
-| `list_simulators` | List all available iOS simulators with state |
-| `boot_simulator` | Boot a simulator by UDID |
-| `shutdown_simulator` | Shutdown a simulator |
-| `screenshot` | Take a screenshot (returns base64 PNG) |
-| `launch_app` | Launch an app by bundle ID |
-| `terminate_app` | Terminate a running app |
-| `list_apps` | List installed apps on simulator |
-| `tap` | Tap at x,y coordinates |
-| `swipe` | Swipe from one point to another |
-| `type_text` | Type text into focused field |
-| `press_key` | Press a keyboard key |
-| `press_button` | Press device button (home, lock, siri, apple_pay) |
-| `open_url` | Open a URL in the simulator |
-| `get_screen_size` | Get simulator screen dimensions |
-| `describe_screen` | Get accessibility tree of current screen |
-| `describe_point` | Get accessibility info at specific coordinates |
-| `find_elements` | Find UI elements by label (case-insensitive partial match) |
-| `tap_element` | Find an element by label and tap it |
+### Simulator Management
 
-## Example Usage
+| Tool | Description | Returns |
+|------|-------------|---------|
+| `list_simulators` | List all iOS simulators with state | Array: `[{name, udid, state, type, os_version}]` |
+| `boot_simulator` | Boot simulator by UDID | Confirmation string |
+| `shutdown_simulator` | Shutdown simulator | Confirmation string |
 
-Once connected, Claude can:
+### Visual Feedback
 
+| Tool | Description | Returns |
+|------|-------------|---------|
+| `screenshot` | Capture simulator screen | Base64 PNG image |
+| `get_screen_size` | Get dimensions | `{pixels: {w,h}, points: {w,h}, scale}` |
+
+### UI Discovery
+
+| Tool | Description | Returns |
+|------|-------------|---------|
+| `describe_screen` | Get all UI elements | Array: `[{type, label, value, frame, enabled}]` |
+| `describe_point` | Get element at coordinates | Element info string |
+| `find_elements` | Search elements by label | Array of matching elements |
+
+### Interactions
+
+| Tool | Description | Returns |
+|------|-------------|---------|
+| `tap` | Tap at x,y coordinates (points) | Confirmation string |
+| `tap_element` | Find element by label and tap it | Confirmation with coordinates |
+| `swipe` | Swipe between two points | Confirmation string |
+| `type_text` | Type into focused field | Confirmation string |
+| `press_key` | Press keyboard key (enter, delete, tab, escape) | Confirmation string |
+| `press_button` | Press device button (home, lock, siri, apple_pay) | Confirmation string |
+
+### App Management
+
+| Tool | Description | Returns |
+|------|-------------|---------|
+| `list_apps` | List installed apps | App list with bundle IDs |
+| `launch_app` | Launch app by bundle ID | Confirmation string |
+| `terminate_app` | Terminate running app | Confirmation string |
+| `open_url` | Open URL (http or custom scheme) | Confirmation string |
+
+## Element Discovery
+
+The `describe_screen` tool returns UI elements in this format:
+
+```json
+[
+  {
+    "type": "Button",
+    "label": "Sign In",
+    "value": null,
+    "frame": {"x": 147, "y": 400, "width": 100, "height": 50},
+    "enabled": true
+  },
+  {
+    "type": "TextField",
+    "label": "Email",
+    "value": "",
+    "frame": {"x": 20, "y": 200, "width": 353, "height": 44},
+    "enabled": true
+  }
+]
 ```
-// List available simulators
-list_simulators()
 
-// Boot iPhone 17 Pro
-boot_simulator({ udid: "FFD39627-..." })
+To tap an element, calculate its center:
+- `centerX = frame.x + frame.width / 2`
+- `centerY = frame.y + frame.height / 2`
 
-// Take a screenshot to see what's on screen
-screenshot()
-
-// Tap on a button at coordinates
-tap({ x: 200, y: 400 })
-
-// Type into a text field
-type_text({ text: "hello@example.com" })
-
-// Swipe up to scroll
-swipe({ startX: 200, startY: 600, endX: 200, endY: 200 })
-
-// Get accessibility info for the screen
-describe_screen()
-```
+Or use `tap_element` which does this automatically.
 
 ## Architecture
 
@@ -122,32 +207,38 @@ describe_screen()
                                                 └─────────────────┘
 ```
 
-- **MCP Protocol**: Communication between Claude and this server
-- **idb CLI**: This server executes idb commands to control the simulator
-- **idb companion**: A daemon that interfaces with the simulator at a low level
-
 ## Configuration
 
 The server looks for `idb` in these locations:
-1. System PATH
-2. `/Users/{user}/Library/Python/3.9/bin/idb`
+1. `IDB_PATH` environment variable (if set)
+2. `~/Library/Python/3.9/bin/idb`
 3. `/opt/homebrew/bin/idb`
-
-You can also set the `IDB_PATH` environment variable to specify a custom location.
+4. `/usr/local/bin/idb`
+5. System PATH
 
 ## Troubleshooting
 
+### "No booted simulator found"
+Use `list_simulators` to find available simulators, then `boot_simulator` with the UDID.
+
 ### "idb not found"
-Make sure idb is installed: `pip3 install fb-idb`
+Install idb: `pip3 install fb-idb`
 
 ### "No Companion Connected"
-The idb companion starts automatically when needed. If issues persist:
+The idb companion usually starts automatically. If issues persist:
 ```bash
 idb_companion --udid <simulator-udid>
 ```
 
-### Tap coordinates are wrong
-Coordinates are in screen points (not pixels). Use `get_screen_size()` to see dimensions, or `describe_screen()` to get element positions.
+### Tap not hitting the right element
+1. Coordinates must be in **points**, not pixels
+2. Use `describe_screen` to get exact element frames
+3. Use `tap_element` with the element's label for more reliable tapping
+
+### Element not found by label
+1. Use `describe_screen` to see all available labels
+2. Labels are case-insensitive partial matches
+3. Some elements may not have accessibility labels set
 
 ## License
 
