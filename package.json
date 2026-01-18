@@ -1,0 +1,29 @@
+{
+  "name": "ios-sim-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for iOS Simulator automation",
+  "main": "dist/index.js",
+  "bin": {
+    "ios-sim-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc -w"
+  },
+  "keywords": [
+    "mcp",
+    "ios",
+    "simulator",
+    "automation"
+  ],
+  "author": "artmamedov",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
