@@ -77,6 +77,8 @@ claude mcp add ios-sim -s user -- node /path/to/ios-sim-mcp/dist/index.js
 | `get_screen_size` | Get simulator screen dimensions |
 | `describe_screen` | Get accessibility tree of current screen |
 | `describe_point` | Get accessibility info at specific coordinates |
+| `find_elements` | Find UI elements by label (case-insensitive partial match) |
+| `tap_element` | Find an element by label and tap it |
 
 ## Example Usage
 
